@@ -3,4 +3,4 @@ dist/
 build/
 .env
 .env.local
-.DS_store
+.env.*.local
