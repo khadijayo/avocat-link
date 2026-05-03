@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { CheckCircle, Scale, Upload, FileText } from 'lucide-react' // Ajout de Upload et FileText
+import { CheckCircle, Scale, Upload, FileText, Loader2 } from 'lucide-react'
 import Navbar from '../components/Navbar'
 import Footer from '../components/Footer'
+import { supabase } from '../lib/supabase'
 
 const specialties = [
   'Criminal Defense',
@@ -37,9 +38,11 @@ export default function LawyerSignUp() {
     agree: false
   })
 
-  const [documents, setDocuments] = useState(null) // Changé pour gérer le fichier localement
+  const [documents, setDocuments] = useState(null)
   const [submitted, setSubmitted] = useState(false)
   const [errors, setErrors] = useState({})
+  const [loading, setLoading] = useState(false)
+  const [submitError, setSubmitError] = useState(null)
 
   const validate = () => {
     const e = {}
@@ -50,7 +53,6 @@ export default function LawyerSignUp() {
     if (!form.specialty) e.specialty = 'Required'
     if (!form.agree) e.agree = 'You must agree to the terms'
     if (!documents) e.documents = 'You must upload certifications & diplomas'
-
     return e
   }
 
@@ -60,14 +62,74 @@ export default function LawyerSignUp() {
     }
   }
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault()
+    setSubmitError(null)
+
     const errs = validate()
     if (Object.keys(errs).length) {
       setErrors(errs)
       return
     }
-    setSubmitted(true)
+
+    setLoading(true)
+
+    try {
+      // 1. Upload document to Supabase Storage
+      let document_url = null
+
+      if (documents) {
+        const fileExt = documents.name.split('.').pop()
+        const fileName = `${Date.now()}-${form.firstName}-${form.lastName}.${fileExt}`
+
+        const { error: uploadError } = await supabase.storage
+          .from('lawyer-documents')
+          .upload(fileName, documents)
+
+        if (uploadError) {
+          console.error('Upload error:', uploadError)
+          throw new Error('Failed to upload document. Please try again.')
+        }
+
+        const { data: urlData } = supabase.storage
+          .from('lawyer-documents')
+          .getPublicUrl(fileName)
+
+        document_url = urlData.publicUrl
+      }
+
+      // 2. Insert lawyer into avocats_details
+      const { error: insertError } = await supabase.from('avocats_details').insert([{
+        first_name: form.firstName,
+        last_name: form.lastName,
+        email: form.email,
+        phone: form.phone || null,
+        bar_number: form.barNumber,
+        specialty: form.specialty,
+        experience: form.experience || null,
+        city: form.city || null,
+        bio: form.bio || null,
+        document_url,
+        initials: `${form.firstName[0]}${form.lastName[0]}`.toUpperCase(),
+        color: 'from-navy-700 to-navy-900',
+        status: 'pending',
+        available: false
+      }])
+
+      if (insertError) {
+        console.error('Insert error:', insertError)
+        if (insertError.code === '23505') {
+          throw new Error('This email is already registered. Please use a different email.')
+        }
+        throw new Error('Submission failed. Please try again.')
+      }
+
+      setSubmitted(true)
+    } catch (err) {
+      setSubmitError(err.message)
+    } finally {
+      setLoading(false)
+    }
   }
 
   if (submitted) {
@@ -165,6 +227,17 @@ export default function LawyerSignUp() {
                 </div>
 
                 <div className="space-y-2">
+                  <label className="block text-[15px] font-bold text-gray-700">Years of Experience</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. 8 years"
+                    value={form.experience}
+                    onChange={(e) => setForm({ ...form, experience: e.target.value })}
+                    className="w-full px-5 py-3.5 rounded-2xl border border-gray-200 bg-white text-sm focus:border-navy-900 focus:ring-0 transition-all outline-none"
+                  />
+                </div>
+
+                <div className="space-y-2">
                   <label className="block text-[15px] font-bold text-gray-700">Your Bio</label>
                   <textarea
                     rows={4}
@@ -175,7 +248,7 @@ export default function LawyerSignUp() {
                   />
                 </div>
 
-                {/* --- SECTION MODIFIÉE : DOCUMENT UPLOAD --- */}
+                {/* DOCUMENT UPLOAD */}
                 <div className="space-y-2">
                   <label className="block text-[15px] font-bold text-gray-700">Certifications & Diplomas</label>
                   <div className="relative group">
@@ -219,8 +292,26 @@ export default function LawyerSignUp() {
                 </div>
                 {errors.agree && <p className="text-red-500 text-xs">{errors.agree}</p>}
 
-                <button type="submit" className="w-full bg-gold-500 hover:bg-gold-600 text-white font-bold py-4 rounded-2xl shadow-lg shadow-gold-500/20 transition-all text-lg active:scale-[0.98]">
-                  Submit Application
+                {/* Global submission error */}
+                {submitError && (
+                  <div className="bg-red-50 border border-red-200 text-red-600 text-sm rounded-2xl px-5 py-4">
+                    {submitError}
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full bg-gold-500 hover:bg-gold-600 disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold py-4 rounded-2xl shadow-lg shadow-gold-500/20 transition-all text-lg active:scale-[0.98] flex items-center justify-center gap-2"
+                >
+                  {loading ? (
+                    <>
+                      <Loader2 size={20} className="animate-spin" />
+                      Submitting...
+                    </>
+                  ) : (
+                    'Submit Application'
+                  )}
                 </button>
               </form>
             </div>

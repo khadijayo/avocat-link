@@ -1,25 +1,65 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { CalendarCheck, Clock, CheckCircle, Scale, Upload, FileText } from 'lucide-react'
+import { CalendarCheck, Clock, CheckCircle, Scale, Upload, FileText, Loader2 } from 'lucide-react'
 import Navbar from '../components/Navbar'
 import Footer from '../components/Footer'
+import { supabase } from '../lib/supabase'
 
 const timeSlots = ['09:00', '10:00', '11:00', '14:00', '15:00', '16:00', '17:00']
 
-const lawyerMap = {
-  '1': { name: 'Me. Amira Benali', specialty: 'Criminal Defense', initials: 'AB', color: 'from-navy-700 to-navy-900' },
-  '2': { name: 'Me. Karim Hadj', specialty: 'Business & Corporate Law', initials: 'KH', color: 'from-gold-500 to-gold-600' },
-  '3': { name: 'Me. Soraya Meziani', specialty: 'Family Law', initials: 'SM', color: 'from-rose-500 to-rose-700' },
+const fallbackLawyer = {
+  name: 'Our Lawyer',
+  specialty: 'Legal Services',
+  initials: '??',
+  color: 'from-navy-700 to-navy-900'
 }
 
 export default function BookConsultation() {
   const [params] = useSearchParams()
-  const lawyerId = params.get('lawyer') || '1'
-  const lawyer = lawyerMap[lawyerId] || lawyerMap['1']
+  const lawyerId = params.get('lawyer')
 
-  const [form, setForm] = useState({ name: '', email: '', phone: '', date: '', time: '', notes: '', file: null })
+  const [lawyer, setLawyer] = useState(null)
+  const [lawyerLoading, setLawyerLoading] = useState(true)
+
+  const [form, setForm] = useState({
+    name: '', email: '', phone: '', date: '', time: '', notes: '', file: null
+  })
   const [submitted, setSubmitted] = useState(false)
   const [errors, setErrors] = useState({})
+  const [loading, setLoading] = useState(false)
+  const [submitError, setSubmitError] = useState(null)
+
+  // Fetch lawyer from Supabase
+  useEffect(() => {
+    const fetchLawyer = async () => {
+      if (!lawyerId) {
+        setLawyer(fallbackLawyer)
+        setLawyerLoading(false)
+        return
+      }
+
+      const { data, error } = await supabase
+        .from('avocats_details')
+        .select('id, first_name, last_name, specialty, initials, color')
+        .eq('id', lawyerId)
+        .single()
+
+      if (error || !data) {
+        setLawyer(fallbackLawyer)
+      } else {
+        setLawyer({
+          id: data.id,
+          name: `Me. ${data.first_name} ${data.last_name}`,
+          specialty: data.specialty,
+          initials: data.initials || `${data.first_name[0]}${data.last_name[0]}`,
+          color: data.color || 'from-navy-700 to-navy-900'
+        })
+      }
+      setLawyerLoading(false)
+    }
+
+    fetchLawyer()
+  }, [lawyerId])
 
   const validate = () => {
     const e = {}
@@ -30,17 +70,81 @@ export default function BookConsultation() {
     return e
   }
 
-  const handleSubmit = (e) => {
-    e.preventDefault()
-    const errs = validate()
-    if (Object.keys(errs).length) { setErrors(errs); return }
-    setSubmitted(true)
-  }
-
   const handleFileChange = (e) => {
     if (e.target.files[0]) {
       setForm({ ...form, file: e.target.files[0] })
     }
+  }
+
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    setSubmitError(null)
+
+    const errs = validate()
+    if (Object.keys(errs).length) { setErrors(errs); return }
+
+    setLoading(true)
+
+    try {
+      // 1. Upload case file if provided
+      let file_url = null
+
+      if (form.file) {
+        const fileExt = form.file.name.split('.').pop()
+        const fileName = `${Date.now()}-${form.name.replace(/\s+/g, '-')}.${fileExt}`
+
+        const { error: uploadError } = await supabase.storage
+          .from('case-files')
+          .upload(fileName, form.file)
+
+        if (uploadError) {
+          console.error('Upload error:', uploadError)
+          throw new Error('Failed to upload file. Please try again.')
+        }
+
+        const { data: urlData } = supabase.storage
+          .from('case-files')
+          .getPublicUrl(fileName)
+
+        file_url = urlData.publicUrl
+      }
+
+      // 2. Insert appointment into Supabase
+      const { error: insertError } = await supabase.from('appointments').insert([{
+        client_name: form.name,
+        client_email: form.email,
+        client_phone: form.phone || null,
+        lawyer_id: lawyer?.id || null,
+        date: form.date,
+        time: form.time,
+        notes: form.notes || null,
+        file_url,
+        status: 'pending'
+      }])
+
+      if (insertError) {
+        console.error('Insert error:', insertError)
+        throw new Error('Booking failed. Please try again.')
+      }
+
+      setSubmitted(true)
+    } catch (err) {
+      setSubmitError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  if (lawyerLoading) {
+    return (
+      <div className="min-h-screen flex flex-col">
+        <Navbar />
+        <div className="flex-1 flex items-center justify-center">
+          <Loader2 size={32} className="animate-spin text-navy-700" />
+        </div>
+        <Footer />
+      </div>
+    )
   }
 
   if (submitted) {
@@ -51,7 +155,7 @@ export default function BookConsultation() {
           <div className="text-center max-w-md px-4">
             <CheckCircle size={60} className="text-emerald-500 mx-auto mb-6" />
             <h2 className="font-serif font-bold text-navy-900 text-3xl mb-3">Booking Confirmed!</h2>
-            <p className="text-gray-500 mb-8">Your consultation with {lawyer.name} is scheduled.</p>
+            <p className="text-gray-500 mb-8">Your consultation with {lawyer.name} is scheduled. You will receive a confirmation shortly.</p>
             <a href="/" className="btn-primary">Back to Home</a>
           </div>
         </div>
@@ -68,7 +172,7 @@ export default function BookConsultation() {
         <div className="max-w-6xl mx-auto px-4">
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
 
-            {/* Colonne Gauche (Style Carte Foncée comme avc.png) */}
+            {/* Left dark card */}
             <div className="lg:col-span-4">
               <div className="bg-[#0B1221] rounded-[2rem] p-10 text-white min-h-[600px] flex flex-col shadow-2xl sticky top-28">
                 <div className="w-14 h-14 rounded-2xl bg-white/10 flex items-center justify-center mb-8">
@@ -99,7 +203,7 @@ export default function BookConsultation() {
               </div>
             </div>
 
-            {/* Colonne Droite (Formulaire Blanc) */}
+            {/* Right form */}
             <div className="lg:col-span-8">
               <form onSubmit={handleSubmit} className="bg-white rounded-[2rem] shadow-sm border border-gray-100 p-8 lg:p-12">
                 <h2 className="font-serif font-bold text-navy-900 text-3xl mb-10">Consultation Details</h2>
@@ -145,6 +249,7 @@ export default function BookConsultation() {
                     <input
                       type="date"
                       value={form.date}
+                      min={new Date().toISOString().split('T')[0]}
                       onChange={(e) => setForm({ ...form, date: e.target.value })}
                       className="w-full px-5 py-4 rounded-2xl border border-gray-200 bg-white text-sm focus:border-navy-900 focus:ring-0 transition-all outline-none"
                     />
@@ -172,15 +277,18 @@ export default function BookConsultation() {
                   {errors.time && <p className="text-red-500 text-xs">{errors.time}</p>}
                 </div>
 
-                {/* --- NEW: FILE UPLOAD SECTION --- */}
+                {/* File upload */}
                 <div className="mt-8 space-y-2">
-                  <label className="text-[15px] font-bold text-gray-700">Upload Case Files <span className="text-gray-400 font-normal">(Optional)</span></label>
+                  <label className="text-[15px] font-bold text-gray-700">
+                    Upload Case Files <span className="text-gray-400 font-normal">(Optional)</span>
+                  </label>
                   <div className="relative group">
                     <input
                       type="file"
                       id="file-upload"
                       className="hidden"
                       onChange={handleFileChange}
+                      accept=".pdf,.jpg,.jpeg,.png"
                     />
                     <label
                       htmlFor="file-upload"
@@ -189,7 +297,7 @@ export default function BookConsultation() {
                       {form.file ? (
                         <div className="flex items-center gap-2 text-navy-900 font-medium">
                           <FileText className="text-gold-500" />
-                          <span>{form.file.name}</span>
+                          <span className="text-sm truncate max-w-[200px]">{form.file.name}</span>
                         </div>
                       ) : (
                         <div className="flex flex-col items-center gap-2">
@@ -212,8 +320,25 @@ export default function BookConsultation() {
                   />
                 </div>
 
-                <button type="submit" className="w-full mt-12 bg-gold-500 hover:bg-gold-600 text-white font-bold py-5 rounded-2xl shadow-lg shadow-gold-500/20 transition-all text-lg active:scale-[0.98]">
-                  Confirm Booking
+                {submitError && (
+                  <div className="mt-6 bg-red-50 border border-red-200 text-red-600 text-sm rounded-2xl px-5 py-4">
+                    {submitError}
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  disabled={loading}
+                  className="w-full mt-10 bg-gold-500 hover:bg-gold-600 disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold py-5 rounded-2xl shadow-lg shadow-gold-500/20 transition-all text-lg active:scale-[0.98] flex items-center justify-center gap-2"
+                >
+                  {loading ? (
+                    <>
+                      <Loader2 size={20} className="animate-spin" />
+                      Confirming...
+                    </>
+                  ) : (
+                    'Confirm Booking'
+                  )}
                 </button>
               </form>
             </div>
