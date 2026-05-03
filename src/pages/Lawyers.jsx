@@ -37,8 +37,8 @@ export default function Lawyers() {
 
       const { data, error } = await supabase
         .from('avocats_details')
-        .select('id, first_name, last_name, specialty, city, rating, reviews_count, experience, languages, available, initials, color, fee')
-        .eq('status', 'approved')
+        .select('id, first_name, last_name, specialty, city, rating, reviews_count, experience, languages, available, initials, color, fee, status')
+        .in('status', ['approved', null])
         .order('rating', { ascending: false })
 
       if (error) {
@@ -54,7 +54,7 @@ export default function Lawyers() {
           rating: l.rating || 0,
           reviews: l.reviews_count || 0,
           experience: l.experience || 'N/A',
-          languages: l.languages || ['Arabic'],
+          languages: Array.isArray(l.languages) ? l.languages : (l.languages ? [l.languages] : ['Arabic']),
           available: l.available ?? true,
           initials: l.initials || `${l.first_name[0]}${l.last_name[0]}`,
           color: l.color || 'from-navy-700 to-navy-900',

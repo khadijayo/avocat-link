@@ -86,27 +86,29 @@ export default function BookConsultation() {
     setLoading(true)
 
     try {
-      // 1. Upload case file if provided
+      // 1. Upload case file if provided (non-blocking — booking continues even if upload fails)
       let file_url = null
 
       if (form.file) {
-        const fileExt = form.file.name.split('.').pop()
-        const fileName = `${Date.now()}-${form.name.replace(/\s+/g, '-')}.${fileExt}`
+        try {
+          const fileExt = form.file.name.split('.').pop()
+          const fileName = `${Date.now()}-${form.name.replace(/\s+/g, '-')}.${fileExt}`
 
-        const { error: uploadError } = await supabase.storage
-          .from('case-files')
-          .upload(fileName, form.file)
+          const { error: uploadError } = await supabase.storage
+            .from('case-files')
+            .upload(fileName, form.file)
 
-        if (uploadError) {
-          console.error('Upload error:', uploadError)
-          throw new Error('Failed to upload file. Please try again.')
+          if (uploadError) {
+            console.warn('File upload failed (booking will continue without file):', uploadError)
+          } else {
+            const { data: urlData } = supabase.storage
+              .from('case-files')
+              .getPublicUrl(fileName)
+            file_url = urlData.publicUrl
+          }
+        } catch (uploadErr) {
+          console.warn('File upload error (booking will continue without file):', uploadErr)
         }
-
-        const { data: urlData } = supabase.storage
-          .from('case-files')
-          .getPublicUrl(fileName)
-
-        file_url = urlData.publicUrl
       }
 
       // 2. Insert appointment into Supabase
@@ -124,7 +126,10 @@ export default function BookConsultation() {
 
       if (insertError) {
         console.error('Insert error:', insertError)
-        throw new Error('Booking failed. Please try again.')
+        if (insertError.code === '42501') {
+          throw new Error('Permission denied. Please contact support or check Supabase RLS policies.')
+        }
+        throw new Error(`Booking failed: ${insertError.message || 'Please try again.'}`)
       }
 
       setSubmitted(true)
